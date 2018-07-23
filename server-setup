@@ -1,0 +1,1773 @@
+#!/bin/bash
+VERSION="1.0 beta Build 20140616"
+
+## Global Configuration
+DOWNLOAD_PATH="/usr/local/src/server-setup"
+MAIL_ID="vishnukraj@gmail.com"
+NULL_LOG=$DOWNLOAD_PATH/null.log
+
+## Configurations for installation
+LSWS_SERIAL_NO="TRIAL"
+LSWS_ADMIN="admin"
+LSWS_PWD=""
+CL_KEY="" #CloudLinux Licence Key
+KSPLICE_KEY=""
+R1SOFT_SERVER="173.231.43.202"
+
+## Configurations for mirrorring
+MIRROR_HOST=78.47.161.2
+MIRROR_USER=test@quottage.com
+MIRROR_PASS=test123
+MY_CNF=/etc/my.cnf
+CSF_CONFIG=/etc/csf/csf.conf
+CPANEL_CONFIG=/var/cpanel/cpanel.config
+LSWS_CONFIG=/usr/local/lsws/conf/httpd_config.xml
+CAGEFS_CONFIG=/etc/cl.selector/defaults.cfg
+PHP_CONFIG=/etc/cl.selector/php.conf
+
+## Configurations for hardening
+SYSCTL=/etc/sysctl.conf
+HOST_CONF=/etc/host.conf
+BINARY_TO_HARDEN="/usr/bin/wget /usr/bin/lynx /usr/bin/bcc /usr/bin/byacc /usr/bin/cc /usr/bin/gcc /usr/bin/i386-redhat-linux-gcc"
+FTP_CONF=/etc/pure-ftpd.conf
+FSTAB=/etc/fstab
+NAMED_CONF=/etc/named.conf
+DNS_CONF=/etc/nsswitch.conf
+SSH_PORT=3879
+WHEEL_USER=secure
+SSHD_CONF=/etc/ssh/sshd_config
+
+## Configurations for Restart Services
+RS_CPANEL="off"
+RS_MYSQL="off"
+RS_LSWS="off"
+RS_SSH="off"
+RS_CSF="off"
+RS_DNS="off"
+RS_FTP="off"
+RS_R1SOFT="off"
+RS_NET="off"
+
+## Beautification Variables
+INSTALLED="\e[0;32m\t\t\t[Installed]\e[0m"
+NOT_INSTALLED="\e[0;33m\t\t\t[Not found]\e[0m"
+NOT_SUPPORTED="\e[0;31m\t\t\t[Unsupport]\e[0m"
+COMPLETED="\e[0;32m\t\t\t[Completed]\e[0m"
+ABORT="\e[0;33m\t\t\t[  Abort  ]\e[0m"
+STARTING="\e[0;36m\t\t\t[Starting ]\e[0m"
+DONE="\e[0;32m\t\t\t[ Success ]\e[0m"
+FAIL="\e[0;31m\t\t\t[ Failed  ]\e[0m"
+
+## Function definitions
+parse_switch(){
+	for switch in $@
+       	do
+	        case $switch in
+	        -f|--force)
+	        FORCE="yes"
+        	;;
+	        -c|--check)
+        	CHECK_ONLY="yes"
+	        ;;
+	        *|-h|--help)
+        	echo -e "Server Setup and Optimization Script (version $VERSION)\n"
+	        echo "Usage:"
+        	echo -e "-f, --force\t\tAttempt force run if pre-check failed"
+	        echo -e "-c, --check\t\tRun check only"
+	        echo -e "-h, --help \t\tShow this help\n"
+	        exit 0
+	        ;;
+        	esac
+        done
+}
+
+pre_install(){
+	clear
+	mkdir -p $DOWNLOAD_PATH &> /dev/null
+	: 2> /dev/null > $NULL_LOG
+	date 2> /dev/null &>> $NULL_LOG
+	echo -ne "Checking ROOT access...\t\t"
+	if [ "`id -u`" == "0" ]
+        	then echo -e "$DONE"
+	else
+        	echo -e "$FAIL"
+	        PRE_CHECK=1
+	fi
+
+	echo -ne "Checking Network connectivty...\t"
+	if ping -c 1 -w 3 -i 0.2 -s 16 8.8.8.8 &> /dev/null
+	        then echo -e "$DONE"
+		echo -ne "Checking DNS Resolver...\t"
+		if host -t A google.com &> /dev/null
+			then echo -e "$DONE"
+		else
+			echo -e "$FAIL"
+			PRE_CHECK=1
+		fi
+	else
+	        echo -e "$FAIL"
+        	PRE_CHECK=1
+	fi
+
+	echo -ne "Checking Download path...\t"
+	if touch $DOWNLOAD_PATH/write_test 2> /dev/null &>> $NULL_LOG
+        	then echo -e "$DONE"
+	        rm -f $DOWNLOAD_PATH/write_test 2> /dev/null &>> $NULL_LOG
+	else
+        	echo -e "$FAIL"
+	        PRE_CHECK=1
+	fi
+	if [ "$PRE_CHECK" == "1" ] && [ "$FORCE" != "yes" ] && [ "$CHECK_ONLY" != "yes" ]
+		then
+		echo -e "Prerequisites Failed! See 'help'$ABORT"
+		exit 1
+	fi
+}
+
+add_repo(){
+        echo -ne "Adding third-party repos"
+	if [ -s /etc/yum.repos.d ]
+	then
+	        if [ ! -f /etc/yum.repos.d/webtatic.repo ]
+        	        then rpm -ivh http://mirror.webtatic.com/yum/el6/latest.rpm 2> /dev/null &>> $NULL_LOG
+	        fi
+        	echo -n .
+	        if [ ! -f /etc/yum.repos.d/rpmforge.repo ]
+        	        then if uname -a | grep i686 2> /dev/null &>> $NULL_LOG
+        	        	then rpm -ivh http://pkgs.repoforge.org/rpmforge-release/rpmforge-release-0.5.3-1.el6.rf.i686.rpm 2> /dev/null &>> $NULL_LOG
+                	else
+                        	rpm -ivh  http://pkgs.repoforge.org/rpmforge-release/rpmforge-release-0.5.3-1.el6.rf.x86_64.rpm 2> /dev/null &>> $NULL_LOG
+	                fi
+	        fi
+        	echo -n .
+	        if [ ! -f /etc/yum.repos.d/epel.repo ]
+        	        then if uname -a | grep i686 2> /dev/null &>> $NULL_LOG
+                	        then rpm -ivh http://download.fedoraproject.org/pub/epel/6/i386/epel-release-6-8.noarch.rpm 2> /dev/null &>> $NULL_LOG
+	                else
+        	                rpm -ivh  http://download.fedoraproject.org/pub/epel/6/x86_64/epel-release-6-8.noarch.rpm 2> /dev/null &>> $NULL_LOG
+                	fi
+	        fi
+		echo -n .
+		if [ ! -f /etc/yum.repos.d/Percona.repo ]
+			then if uname -a | grep i686 2> /dev/null &>> $NULL_LOG
+                	        then rpm -ivh http://www.percona.com/redir/downloads/percona-release/percona-release-0.0-1.i386.rpm 2> /dev/null &>> $NULL_LOG
+			else
+				rpm -ivh http://www.percona.com/redir/downloads/percona-release/percona-release-0.0-1.x86_64.rpm 2> /dev/null &>> $NULL_LOG
+			fi
+		fi
+		if [ ! -f /etc/yum.repos.d/epel.repo ]
+			then rpm -Uvh http://dl.fedoraproject.org/pub/epel/6/x86_64/epel-release-6-8.noarch.rpm 2> /dev/null &>> $NULL_LOG
+		fi
+		if [ ! -f /etc/yum.repos.d/remi.repo ]
+			then rpm -Uvh http://rpms.famillecollet.com/enterprise/remi-release-6.rpm 2> /dev/null &>> $NULL_LOG
+		fi
+		echo -e "\t$DONE"
+	else
+		echo -e "...\t$ABORT"
+	fi
+}
+
+
+check_cloudlinux(){
+        echo -ne "Checking for CloudLinux...\t"
+	if [ -f /proc/user_beancounters ] || [ ! -f /etc/redhat-release ]
+		then support_cloudlinux="off"
+		has_cloudlinux="off"
+                echo -e "$NOT_SUPPORTED"
+        else if cat /etc/redhat-release 2> /dev/null &>> $NULL_LOG| grep CloudLinux
+                then has_cloudlinux="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_cloudlinux="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+        fi
+}
+
+prompt_cloudlinux(){
+	if ! [ "$support_cloudlinux" == "off" ]
+		then if [ -z "$CL_KEY" ]
+		then echo -n "Enter CloudLinux Key: "
+	        read CL_KEY < /dev/tty
+		if [ -z "$CL_KEY" ]
+                	then echo -n "Key is empty, "
+                prompt_cloudlinux
+        	fi
+		fi
+	fi
+}
+
+install_cloudlinux(){
+        if [ "$support_cloudlinux" == "off" ]
+	        then echo -e "CloudLinux is not supported\t$ABORT"
+        else if [ "$has_cloudlinux" == "on" ]
+                then
+                        echo -e "CloudLinux is already installed\t$ABORT"
+                else
+                        echo -e "\nCloudLinux installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://repo.cloudlinux.com/cloudlinux/sources/cln/cpanel2cl
+                        sh cpanel2cl -k $CL_KEY
+                        echo -e "CloudLinux installation...\t\t$COMPLETED\n"
+                fi
+        fi
+}
+
+check_cagefs(){
+        echo -ne "Checking for CageFS...\t\t"
+	if [ "$support_cloudlinux" == "off" ]
+		then support_cagefs="off"
+		has_cagefs="off"
+		echo -e "$NOT_SUPPORTED"
+        else if cagefsctl --help 2> /dev/null &>> $NULL_LOG
+                then has_cagefs="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_cagefs="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+	fi
+}
+
+install_cagefs(){
+	check_cloudlinux 2> /dev/null &>> $NULL_LOG
+	if [ "$support_cagefs" == "off" ]
+		then echo -e "CageFS is not supported\t\t$ABORT"
+	else if [ "$has_cloudlinux" == "off" ]
+		then echo -e "CageFS require CloudLinux\t$ABORT"
+        else if [ "$has_cagefs" == "on" ]
+                then
+                        echo -e "CageFS is already installed\t$ABORT"
+                else
+                        echo -e "\nCageFS installation...\t\t$STARTING"
+                        yum install -y cagefs
+                        cagefsctl --init
+                        echo -e "CageFS installation...\t\t$COMPLETED\n"
+                fi
+	fi
+	fi
+}
+
+check_phpselector(){
+        echo -ne "Checking for PHP Selector...\t"
+	if [ "$support_cloudlinux" == "off" ]
+		then support_phpselector="off"
+		has_phpselector="off"
+		echo -e "$NOT_SUPPORTED"
+        else if cl-selector --help 2> /dev/null &>> $NULL_LOG
+                then has_phpselector="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_phpselector="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+	fi
+}
+
+install_phpselector(){
+	check_cagefs 2> /dev/null &>> $NULL_LOG
+	if [ "$support_phpselector" == "off" ]
+                then echo -e "PHP Selector is not supported\t$ABORT"
+        else if [ "$has_cagefs" == "off" ]
+                then echo -e "PHP Selector require CageFS\t$ABORT"
+        if [ "$has_phpselector" == "on" ]
+                then
+                        echo -e "PHP Selector is already installed\t$ABORT"
+                else
+                        echo -e "\nPHP Selector installation...\t$STARTING"
+                        yum groupinstall -y alt-php
+                        yum update -y cagefs lvemanager
+                        echo -e "PHP Selector installation...\t$COMPLETED\n"
+                fi
+	fi
+	fi
+}
+
+check_lvem(){
+        echo -ne "Checking for LVE Manager...\t"
+        if  cl-quota --help 2> /dev/null &>> $NULL_LOG
+                then has_lvem="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_lvem="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_lvem(){
+        if [ "$has_lvem" == "on" ]
+                then
+                        echo -e "LVE Manager is already installed\t$ABORT"
+                else
+                        echo -e "\nLVE Manager installation...\t$STARTING"
+                        yum install -y lvemanager
+                        echo -e "LVE Manager installation...\t$COMPLETED\n"
+                fi
+}
+
+
+check_ksplice(){
+        echo -ne "Checking for Ksplice...\t\t"
+        if which ksplice-depmod 2> /dev/null &>> $NULL_LOG
+                then has_ksplice="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_ksplice="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+prompt_ksplice(){
+	if [ -z $KSPLICE_KEY ]
+		then echo -n "Enter Ksplice Access Key: "
+	        read KSPLICE_KEY < /dev/tty
+        	if [ -z $KSPLICE_KEY ]
+                	then echo -n "Key is empty, "
+	                prompt_ksplice
+        	fi
+	fi
+}
+
+install_ksplice(){
+        if [ "$has_ksplice" == "on" ]
+                then
+                        echo -e "Ksplice is already installed\t$ABORT"
+                else
+                        echo -e "\nKsplice installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N https://www.ksplice.com/uptrack/install-uptrack
+                        sh install-uptrack $KSPLICE_KEY
+                        uptrack-upgrade -y
+                        echo "Configuring AutoUpdate..."
+                        replace "autoinstall = no" "autoinstall = yes" -- /etc/uptrack/uptrack.conf
+                        echo -e "Ksplice installation...\t\t$COMPLETED\n"
+                fi
+}
+
+
+check_cpanel(){
+        echo -ne "Checking for cPanel...\t\t"
+        if ! [ -f /etc/redhat-release ]
+		then support_cpanel="off"
+		has_cpanel="off"
+		echo -e "$NOT_SUPPORTED"
+        else if /usr/local/cpanel/cpanel -V 2> /dev/null &>> $NULL_LOG
+                	then has_cpanel="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_cpanel="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+	fi
+}
+
+install_cpanel(){
+	if [ "$support_cpanel" == "off" ]
+		then echo -e "cPanel is not supported\t\t$ABORT"
+        else if [ "$has_cpanel" == "on" ]
+                then
+                        echo -e "cPanel is already installed\t$ABORT"
+                else
+                        echo -e "\ncPanel installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        mkdir cpanel
+                        cd cpanel
+                        wget -N http://httpupdate.cpanel.net/latest
+                        sh latest
+                        echo -e "cPanel installation...\t\t$COMPLETED\n"
+                fi
+	fi
+}
+
+check_litespeed(){
+        echo -ne "Checking for LiteSpeed...\t"
+        if [ -f /usr/local/lsws/bin/lshttpd ]
+                then has_litespeed="on"
+                echo -e "$INSTALLED"
+        else
+                has_litespeed="off"
+                echo -e "$NOT_INSTALLED"
+        fi
+}
+
+prompt_litespeed(){
+	if [ -z $LSWS_PWD ]
+		then echo -n "Enter LiteSpeed Admin password: "
+	        read LSWS_PWD < /dev/tty
+        	if [ -z $LSWS_PWD ]
+                	then echo -n "Password is empty, "
+	                prompt_litespeed
+        	fi
+	fi
+}
+
+install_litespeed(){
+        if [ "$has_litespeed" == "on" ]
+                then echo -e "LiteSpeed is already installed$ABORT"
+        else
+                echo -e "LiteSpeed installation...\t$STARTING\n"
+                cd $DOWNLOAD_PATH
+                wget -N http://www.litespeedtech.com/packages/cpanel/lsws_whm_autoinstaller.sh
+                chmod a+x lsws_whm_autoinstaller.sh
+                ./lsws_whm_autoinstaller.sh $LSWS_SERIAL_NO 2 0 $LSWS_ADMIN $LSWS_PWD $MAIL_ID
+                ## LSWS EasyApache hooks begin
+                if ! grep "^#!/bin" /usr/local/cpanel/scripts/before_httpd_restart_tests 2> /dev/null &>> $NULL_LOG
+                        then
+                        echo '#!/bin/sh' > /usr/local/cpanel/scripts/before_httpd_restart_tests
+                fi
+                if ! grep "/usr/local/cpanel/whostmgr/docroot/cgi/lsws/bin/whm_eahook.sh" /usr/local/cpanel/scripts/before_httpd_restart_tests
+                        then echo -e "sh /usr/local/cpanel/whostmgr/docroot/cgi/lsws/bin/whm_eahook.sh before_httpd_restart_tests \$4 # for integration of build matching php for LiteSpeed webserver" >> /usr/local/cpanel/scripts/before_httpd_restart_tests
+                fi
+                if ! grep "^#!/bin" /usr/local/cpanel/scripts/before_apache_make 2> /dev/null &>> $NULL_LOG
+                        then
+                        echo '#!/bin/sh' > /usr/local/cpanel/scripts/before_apache_make
+                fi
+                if ! grep "/usr/local/cpanel/whostmgr/docroot/cgi/lsws/bin/whm_eahook.sh" /usr/local/cpanel/scripts/before_apache_make 2> /dev/null &>> $NULL_LOG
+                        then echo -e "/usr/share/cagefs/cpanel/cagefs_hook.sh   #CageFS Version 2.0. Required for apache's suexec recompilation" >> /usr/local/cpanel/scripts/before_apache_make
+                        echo -e "sh /usr/local/cpanel/whostmgr/docroot/cgi/lsws/bin/whm_eahook.sh before_apache_make # for integration of build matching php for LiteSpeed webserver" >> /usr/local/cpanel/scripts/before_apache_make
+                fi
+                if ! grep "^#!/bin" /usr/local/cpanel/scripts/after_httpd_restart_tests 2> /dev/null &>> $NULL_LOG
+                        then
+                        echo '#!/bin/sh' > /usr/local/cpanel/scripts/after_httpd_restart_tests
+                fi
+                if ! grep "/usr/local/cpanel/whostmgr/docroot/cgi/lsws/bin/whm_eahook.sh" /usr/local/cpanel/scripts/after_httpd_restart_tests 2> /dev/null &>> $NULL_LOG
+                        then
+                        echo -e "sh /usr/local/cpanel/whostmgr/docroot/cgi/lsws/bin/whm_eahook.sh after_httpd_restart_tests \$4 # for integration of build matching php for LiteSpeed webserver" >> /usr/local/cpanel/scripts/after_httpd_restart_tests
+                fi
+                chmod +x /usr/local/cpanel/scripts/before_httpd_restart_tests /usr/local/cpanel/scripts/before_apache_make /usr/local/cpanel/scripts/after_httpd_restart_tests
+                ## LSWS EasyApache hooks completed
+
+        service httpd stop
+        service lsws start
+        echo -e "LiteSpeed installation...\t$COMPLETED\n"
+        fi
+}
+
+check_percona(){
+        echo -ne "Checking for Percona MySQL...\t"
+        if rpm -qa | grep ^Percona-Server 2> /dev/null &>> $NULL_LOG
+                then has_percona="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_percona="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_percona(){
+        if [ "$has_percona" == "on" ]
+                then
+                        echo -e "Percona MySQL is already installed\t$ABORT"
+                else
+                        echo -e "\nPercona MySQL installation...\t$STARTING"
+                        /etc/init.d/httpd stop; /etc/init.d/exim stop; /etc/init.d/pure-ftpd stop; /etc/init.d/dovecot stop; /etc/init.d/cpanel stop; /etc/init.d/lfd stop; /etc/init.d/crond stop; /etc/init.d/mysql stop
+                        cp -Rf /var/lib/mysql /var/lib/mysql.bak
+                        /scripts/update_local_rpm_versions --edit target_settings.MySQL50 uninstalled
+                        /scripts/update_local_rpm_versions --edit target_settings.MySQL51 uninstalled
+                        /scripts/update_local_rpm_versions --edit target_settings.MySQL55 uninstalled
+                        /scripts/check_cpanel_rpms --fix --targets=MySQL50,MySQL51,MySQL55
+                        yum install -y Percona-Server-client-55 Percona-Server-server-55 Percona-Server-devel-55
+                        /etc/init.d/httpd start; /etc/init.d/exim start; /etc/init.d/pure-ftpd start; /etc/init.d/dovecot start; /etc/init.d/cpanel start; /etc/init.d/lfd start; /etc/init.d/crond start; /etc/init.d/mysql start
+                        echo -e "Percona MySQL installation...\t$COMPLETED\n"
+                fi
+}
+
+
+check_sim(){
+        echo -en "Checking for SIM...\t\t"
+        if sim 2> /dev/null &>> $NULL_LOG
+                then echo -e "$INSTALLED"
+                has_sim="on"
+        else
+                echo -e "$NOT_INSTALLED"
+                has_sim="off"
+        fi
+}
+
+install_sim(){
+        if [ "$has_sim" == "on" ]
+                then echo -e "SIM is already installed\t$ABORT"
+        else
+                echo -e "\nSIM installation...\t\t$STARTING"
+                cd $DOWNLOAD_PATH
+                wget -N http://www.rfxn.com/downloads/sim-current.tar.gz
+                tar -xzf sim-current.tar.gz
+                cd sim-* && ./setup -q
+                echo -e "SIM installation...\t\t$COMPLETED\n"
+        fi
+}
+
+check_spri(){
+        echo -ne "Checking for SPRI...\t\t"
+        if spri 2> /dev/null &>> $NULL_LOG
+                then has_spri="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_spri="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_spri(){
+        if [ "$has_spri" == "on" ]
+                then
+                        echo -e "SPRI is already installed\t$ABORT"
+                else
+                        echo -e "\nSPRI installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://www.rfxn.com/downloads/spri-current.tar.gz
+                        tar -xzf spri-current.tar.gz
+                        cd spri-* && ./install.sh
+                        echo -e "SPRI installation...\t\t$COMPLETED\n"
+                fi
+}
+
+
+check_prm(){
+        echo -ne "Checking for PRM...\t"
+        if prm -v 2> /dev/null &>> $NULL_LOG
+                then has_prm="on"
+                echo -e "\t$INSTALLED"
+        else
+                has_prm="off"
+                echo -e "\t$NOT_INSTALLED"
+        fi
+}
+
+install_prm(){
+if [ "$has_prm" == "on" ]
+        then echo -e "PRM is already installed\t$ABORT"
+else
+        echo -e "\nPRM installation...\t\t$STARTING"
+        cd $DOWNLOAD_PATH
+        wget -N http://www.rfxn.com/downloads/prm-current.tar.gz
+        tar -zxf prm-current.tar.gz
+        cd prm-1.*
+        ./install.sh
+        echo -e "PRM installation...\t\t$COMPLETED\n"
+fi
+}
+
+check_les(){
+        echo -ne "Checking for LES...\t\t"
+        if which les 2> /dev/null &>> $NULL_LOG
+                then has_les="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_les="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_les(){
+        if [ "$has_les" == "on" ]
+                then
+                        echo -e "LES is already installed\t$ABORT"
+                else
+                        echo -e "\nLES installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://www.rfxn.com/downloads/les-current.tar.gz
+                        tar -zxf les-current.tar.gz
+                        cd les-*
+                        ./install.sh
+                        echo -e "LES installation...\t\t$COMPLETED\n"
+                fi
+}
+
+check_lsm(){
+        echo -ne "Checking for LSM...\t\t"
+        if lsm 2> /dev/null &>> $NULL_LOG
+                then has_lsm="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_lsm="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_lsm(){
+        if [ "$has_lsm" == "on" ]
+                then
+                        echo -e "LSM is already installed\t$ABORT"
+                else
+                        echo -e "\nLSM installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://www.rfxn.com/downloads/lsm-current.tar.gz
+                        tar -xzf lsm-current.tar.gz
+                        cd lsm-*
+                        ./install.sh
+                        echo -e "LSM installation...\t\t$COMPLETED\n"
+                fi
+}
+
+check_logwatch(){
+        echo -ne "Checking for Logwatch...\t"
+        if logwatch --version 2> /dev/null &>> $NULL_LOG
+                then has_logwatch="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_logwatch="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_logwatch(){
+        if [ "$has_logwatch" == "on" ]
+                then
+                        echo -e "Logwatch is already installed\t$ABORT"
+                else
+                        echo -e "\nLogwatch installation...\t$STARTING"
+                        yum install -y logwatch
+                        echo -e "Logwatch installation...\t$COMPLETED\n"
+                fi
+}
+
+
+check_mytop(){
+        echo -ne "Checking for MyTOP...\t\t"
+        if rpm -qa | grep ^mytop 2> /dev/null &>> $NULL_LOG
+                then has_mytop="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_mytop="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_mytop(){
+        if [ "$has_mytop" == "on" ]
+                then
+                        echo -e "MyTOP is already installed\t$ABORT"
+                else
+                        echo -e "\nMyTOP installation...\t\t$STARTING"
+                        yum install -y mytop
+                        echo -e "MyTOP installation...\t\t$COMPLETED\n"
+                fi
+}
+
+
+check_libsafe(){
+        echo -ne "Checking for LibSafe...\t\t"
+        if grep "libsafe" /etc/ld.so.preload 2> /dev/null &>> $NULL_LOG
+                then has_libsafe="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_libsafe="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_libsafe(){
+        if [ "$has_libsafe" == "on" ]
+                then
+                        echo -e "LibSafe is already installed\t$ABORT"
+                else
+                        echo -e "\nLibSafe installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://pubs.research.avayalabs.com/src/libsafe-2.0-16.tgz
+                        tar -xzf libsafe-2.0-16.tgz
+                        cd libsafe-2.0-16/
+                        make
+                        echo y | make install
+                        echo -e "LibSafe installation...\t\t$COMPLETED\n"
+                fi
+}
+
+check_chkrootkit(){
+        echo -ne "Checking for CHKRootKit...\t"
+        if /usr/local/chkrootkit/chkrootkit --version 2> /dev/null &>> $NULL_LOG
+                then has_chkrootkit="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_chkrootkit="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_chkrootkit(){
+        if [ "$has_chkrootkit" == "on" ]
+                then
+                        echo -e "CHKRootKit is already installed\t$ABORT"
+                else
+                        echo -e "\nCHKRootKit installation...\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        cd /usr/local/src
+                        wget -N ftp://ftp.pangeia.com.br/pub/seg/pac/chkrootkit.tar.gz
+                        tar -zxf chkrootkit.tar.gz
+                        mkdir /usr/local/chkrootkit
+                        cp /usr/local/src/chkrootkit*/* /usr/local/chkrootkit
+                        cd /usr/local/chkrootkit
+                        make sense
+                        if ls /usr/local/chkrootkit/chkrootkit 2> /dev/null &>> $NULL_LOG
+                                then echo -e "Configuring Cron..."
+                                echo '#!/bin/sh' > /etc/cron.daily/chkrootkit.sh
+                                echo -e "(/usr/local/chkrootkit/chkrootkit) | /bin/mail -s \"CHKROOTKIT Daily Run (\$HOSTNAME)\" $MAIL_ID" >> /etc/cron.daily/chkrootkit.sh
+                                chmod +x /etc/cron.daily/chkrootkit.sh
+                        fi
+                        echo -e "CHKRootKit installation...\t$COMPLETED\n"
+                fi
+}
+
+check_rkhunter(){
+        echo -ne "Checking for RKHunter...\t"
+        if rkhunter --version 2> /dev/null &>> $NULL_LOG
+                then has_rkhunter="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_rkhunter="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_rkhunter(){
+        if [ "$has_rkhunter" == "on" ]
+                then
+                        echo -e "RKHunter is already installed\t$ABORT"
+                else
+                        echo -e "\nRKHunter installation...\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://downloads.sourceforge.net/project/rkhunter/rkhunter/1.4.2/rkhunter-1.4.2.tar.gz
+                        tar -xzf rkhunter-1.4.2.tar.gz
+                        cd rkhunter-1.4.2
+                        sh installer.sh --layout /usr/local --install
+                        if rkhunter --version 2> /dev/null &>> $NULL_LOG
+                                then "Configuring Cron..."
+                                echo > '#!/bin/bash' > /etc/cron.daily/rkhunter.sh
+                                echo "(/usr/local/bin/rkhunter -c --cronjob 2>&1 | mail -s \"Daily Rkhunter Scan Report: \$HOSTNAME\" $MAIL_ID)" >> /etc/cron.daily/rkhunter.sh
+                                chmod +x /etc/cron.daily/rkhunter.sh
+                        fi
+                        echo -e "RKHunter installation...\t$COMPLETED\n"
+                fi
+}
+
+check_smartd(){
+        echo -ne "Checking for SMARTD...\t\t"
+        if smartd --version 2> /dev/null &>> $NULL_LOG
+                then has_smartd="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_smartd="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_smartd(){
+        if [ "$has_smartd" == "on" ]
+                then
+                        echo -e "SMARTD is already installed\t$ABORT"
+                else
+                        echo -e "\nSMARTD installation...\t\t$STARTING"
+                        yum install -y smartmontools
+                        echo -e "SMARTD installation...\t\t$COMPLETED\n"
+                fi
+}
+
+check_lcap(){
+        echo -ne "Checking for LCAP...\t\t"
+        if rpm -qa | grep ^lcap 2> /dev/null &>> $NULL_LOG
+                then has_lcap="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_lcap="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_lcap(){
+        if [ "$has_lcap" == "on" ]
+                then
+                        echo -e "LCAP is already installed\t$ABORT"
+                else
+                        echo -e "\nLCAP installation...\t\t$STARTING"
+                        yum install -y lcap
+                        echo -e "LCAP installation...\t\t$COMPLETED\n"
+                fi
+}
+
+
+check_maldet(){
+        echo -ne "Checking for Maldet...\t\t"
+        if maldet --version 2> /dev/null &>> $NULL_LOG
+                then has_maldet="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_maldet="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_maldet(){
+        if [ "$has_maldet" == "on" ]
+                then
+                        echo -e "Maldet is already installed\t$ABORT"
+                else
+                        echo -e "\nMaldet installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://www.rfxn.com/downloads/maldetect-current.tar.gz
+                        tar -xzf maldetect-current.tar.gz
+                        cd maldetect-*
+                        sh ./install.sh or sudo sh ./install.sh
+                        maldet --update-ver
+                        maldet --update
+                        echo -e "Maldet installation...\t\t$COMPLETED\n"
+                fi
+}
+
+check_csf(){
+        echo -ne "Checking for CSF...\t\t"
+        if csf --version  2> /dev/null &>> $NULL_LOG
+                then has_csf="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_csf="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_csf(){
+        if [ "$has_csf" == "on" ]
+                then
+                        echo -e "CSF is already installed\t$ABORT"
+                else
+                        echo -e "\nCSF installation...\t\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://www.configserver.com/free/csf.tgz
+                        tar -xzf csf.tgz
+                        cd csf
+                        sh install.sh
+                        echo -e "CSF installation...\t\t$COMPLETED\n"
+                fi
+}
+
+check_modsec(){
+        echo -ne "Checking for ModSecurity...\t"
+        if httpd -t -D DUMP_MODULES 2> /dev/null 2>> $NULL_LOG | grep security2_module 2> /dev/null &>> $NULL_LOG
+                then has_modsec="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_modsec="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_modsec(){
+        if [ "$has_modsec" == "on" ]
+                then
+                        echo -e "ModSecurity is already installed\t$ABORT"
+                else
+                        echo -e "\nModSecurity installation...\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://configserver.com/free/cmc.tgz
+                        tar -xzf cmc.tgz
+                        cd cmc
+                        sh install.sh
+                        echo -e "ModSecurity installation...\t$COMPLETED\n"
+                fi
+}
+
+check_modevasive(){
+        echo -ne "Checking for ModEvasive...\t"
+        if httpd -t -D DUMP_MODULES 2> /dev/null 2>> $NULL_LOG | grep evasive20_module 2> /dev/null &>> $NULL_LOG
+                then has_modevasive="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_modevasive="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_modevasive(){
+        if [ "$has_modevasive" == "on" ]
+                then
+                        echo -e "ModEvasive is already installed\t$ABORT"
+                else
+                        echo -e "\nModEvasive installation...\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://fossies.org/unix/www/apache_httpd_modules/mod_evasive_1.10.1.tar.gz
+                        tar -xzf mod_evasive_1.10.1.tar.gz
+                        cd mod_evasive/
+                        /usr/local/apache/bin/apxs -cia mod_evasive20.c
+                        echo -e "LoadModule evasive20_module modules/mod_evasive20.so\n<IfModule mod_evasive20.c>\nDOSHashTableSize    3097\nDOSPageCount        2\nDOSSiteCount        50\nDOSPageInterval     1\nDOSSiteInterval     1\nDOSBlockingPeriod   10\n</IfModule>" > /usr/local/apache/conf/mod_evasive.conf
+                        echo -e "Include \"/usr/local/apache/conf/mod_evasive.conf\"" >> /usr/local/apache/conf/includes/pre_main_global.conf
+                        chmod 600 /usr/local/apache/conf/mod_evasive.conf
+                        /scripts/rebuildhttpdconf 2> /dev/null &>> $NULL_LOG
+                        /scripts/restartsrv httpd 2> /dev/null &>> $NULL_LOG
+                        echo -e "ModEvasive installation...\t$COMPLETED\n"
+                fi
+}
+
+
+check_memcached(){
+        echo -ne "Checking for Memcached...\t"
+        if memcached -h 2> /dev/null &>> $NULL_LOG
+                then has_memcached="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_memcached="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_memcached(){
+        if [ "$has_memcached" == "on" ]
+                then
+                        echo -e "Memcached is already installed\t$ABORT"
+                else
+                        echo -e "\nMemcached installation...\t$STARTING"
+                        yum install -y memcached
+                        chkconfig memcached on
+                        /etc/init.d/memcached start
+                        if cagefsctl --help 2> /dev/null &>> $NULL_LOG
+                                then echo "Adding Memcached into CageFS..."
+                                cagefsctl --addrpm memcached alt-libmemcached
+                                cagefsctl --force-update
+                        fi
+                        echo -e "Memcached installation...\t$COMPLETED\n"
+                fi
+}
+
+check_clamav(){
+        echo -ne "Checking for ClamAV...\t\t"
+        if clamscan -V 2> /dev/null &>> $NULL_LOG
+                then has_clamav="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_clamav="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_clamav(){
+
+        check_cpanel 2> /dev/null &>> $NULL_LOG
+        if [ ! "$has_cpanel" == "off" ]
+                then echo -e "ClamAV plugin require cPanel!\t$ABORT"
+        else if [ "$has_clamav" == "on" ]
+                then
+                        echo -e "ClamAV is already installed\t$ABORT"
+                else
+                        echo -e "\nClamAV installation...\t\t$STARTING"
+                        /scripts/update_local_rpm_versions --edit target_settings.clamav installed
+                        /scripts/check_cpanel_rpms --fix --targets=clamav
+                        echo -e "ClamAV installation...\t\t$COMPLETED\n"
+                fi
+        fi
+}
+
+
+check_softaculous(){
+        echo -ne "Checking for Softaculous...\t"
+        if [ -f /usr/local/cpanel/whostmgr/docroot/cgi/softaculous ]
+                then has_softaculous="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_softaculous="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_softaculous(){
+        check_cpanel 2> /dev/null &>> $NULL_LOG
+        if [ "$has_cpanel" == "off" ]
+                then echo -e "Softaculous require cPanel!\t$ABORT" 
+        else if [ "$has_softaculous" == "on" ]
+                then
+                        echo -e "Softaculous is already installed\t$ABORT"
+                else
+                        echo -e "\nSoftaculous installation...\t$STARTING"
+                        if ! grep ioncube /var/cpanel/cpanel.config 2> /dev/null &>> $NULL_LOG
+                                then echo "Enabling IonCube for cPanel... This will take time, Please wait!"
+                                echo "phploader=ioncube" >> /var/cpanel/cpanel.config
+                                /usr/local/cpanel/whostmgr/bin/whostmgr2 --updatetweaksettings 2> /dev/null &>> $NULL_LOG
+                        fi
+                        cd $DOWNLOAD_PATH
+                        mkdir softaculous
+                        cd softaculous
+                        wget -N http://files.softaculous.com/install.sh
+                        chmod 755 install.sh
+                        ./install.sh
+                        echo -e "Softaculous installation...\t$COMPLETED\n"
+                fi
+        fi
+}
+
+check_installatron(){
+        echo -ne "Checking for Installatron...\t"
+        if [ -f /usr/local/cpanel/3rdparty/installatron ]
+                then has_installatron="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_installatron="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_installatron(){
+        check_cpanel 2> /dev/null &>> $NULL_LOG
+        if [ "$has_cpanel" == "off" ]
+                then echo -e "Installatron require cPanel!\t$ABORT"
+        else if [ "$has_installatron" == "on" ]
+                then
+                        echo -e "Installatron is already installed\t$ABORT"
+                else
+                        echo -e "\nInstallatron installation...\t$STARTING"
+                        cd $DOWNLOAD_PATH
+                        wget -N http://data.installatron.com/installatron-plugin.sh
+                        chmod +x installatron-plugin.sh
+                        ./installatron-plugin.sh -f
+                        echo -e "Installatron installation...\t$COMPLETED\n"
+                fi
+        fi
+}
+
+check_apc_pecl(){
+        echo -ne "Checking for APC PECL...\t"
+        if php -i 2> /dev/null 2>> $NULL_LOG | grep -i  ^apc$ 2> /dev/null &>> $NULL_LOG
+                then has_apc_pecl="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_apc_pecl="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_apc_pecl(){
+        check_phpselector 2> /dev/null &>> $NULL_LOG
+        if [ "$has_phpselector" == "on" ]
+                then echo -e "PHP Selector exists\t\t$ABORT"
+        else if [ "$has_apc_pecl" == "on" ]
+                then
+                        echo -e "APC is already installed\t$ABORT"
+                else
+                        echo -e "\nAPC installation...\t\t$STARTING"
+                        yum install -y pcre-devel
+                        echo -e "\n\n\n\n\n\n\n" | pecl install apc
+                        echo -e "APC installation...\t\t$COMPLETED\n"
+                fi
+        fi
+}
+
+check_memcache_pecl(){
+        echo -ne "Checking for Memcache PECL...\t"
+        if php -i 2> /dev/null 2>> $NULL_LOG | grep -i ^memcache$ 2> /dev/null &>> $NULL_LOG
+                then has_memcache_pecl="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_memcache_pecl="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_memcache_pecl(){
+        check_phpselector 2> /dev/null &>> $NULL_LOG
+        if [ "$has_phpselector" == "on" ]
+                then echo -e "PHP Selector exists\t\t$ABORT"
+        else if [ "$has_memcache_pecl" == "on" ]
+                then
+                        echo -e "Memcache is already installed\t$ABORT"
+                else
+                        echo -e "\nMemcache installation...\t$STARTING"
+                        echo -e "\n\n\n" | pecl install memcache
+                        echo -e "Memcache installation...\t$COMPLETED\n"
+                fi
+        fi
+}
+
+check_r1soft(){
+        echo -ne "Checking for R1Soft...\t\t"
+        if r1soft-setup --help 2> /dev/null &>> $NULL_LOG
+                then has_r1soft="on"
+                        echo -e "$INSTALLED"
+                else
+                        has_r1soft="off"
+                        echo -e "$NOT_INSTALLED"
+                fi
+}
+
+install_r1soft(){
+        if [ "$has_r1soft" == "on" ]
+                then
+                        echo -e "R1Soft is already installed\t$ABORT"
+                else
+                        echo -e "\nR1Soft installation...\t\t$STARTING"
+                        echo -e '[r1soft]\nname=R1Soft Repository Server\nbaseurl=http://repo.r1soft.com/yum/stable/$basearch/\nenabled=1\ngpgcheck=0' > /etc/yum.repos.d/r1soft.repo
+                        yum install -y r1soft-cdp-enterprise-agent
+                        r1soft-setup --get-module
+                        r1soft-setup --get-key http://$R1SOFT_SERVER
+                        echo -e "R1Soft installation...\t\t$COMPLETED\n"
+                fi
+}
+
+mirror_check_ftp()
+{
+	echo -ne "Checking Conf repo FTP Server..."
+	mkdir $DOWNLOAD_PATH/mirror_conf 2> /dev/null &>> $NULL_LOG
+	rm -f $DOWNLOAD_PATH/mirror_conf/*.tar.gz 2> /dev/null &>> $NULL_LOG
+	ftp -inv $MIRROR_HOST << EOF 2> /dev/null 2>> $NULL_LOG > $DOWNLOAD_PATH/mirror_conf/check_ftp.log
+	user $MIRROR_USER $MIRROR_PASS
+	bye
+EOF
+	if ! grep -q ^230 $DOWNLOAD_PATH/mirror_conf/check_ftp.log 2> /dev/null &>> $NULL_LOG
+		then FTP_SERVER_STATUS=0
+		echo -e "$FAIL"
+	else
+		echo -e "$DONE"
+	fi
+	: 2> /dev/null 2>> $NULL_LOG > $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+}
+
+mirror_do_ftp()
+{
+	cd $DOWNLOAD_PATH/mirror_conf
+	ftp -inv $MIRROR_HOST << EOF
+	user $MIRROR_USER $MIRROR_PASS
+	get $FILE
+	bye
+EOF
+}
+
+mirror_my_conf()
+{
+	echo -en "Mirrorring MySQL conf...\t"
+	if [ -f $MY_CNF ]
+		then
+		cp -p $MY_CNF ${MY_CNF}_original 2> /dev/null &>> $NULL_LOG
+		echo -e "## MySQL conf\n" >> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		FILE=mycnfconfig.tar.gz
+		mirror_do_ftp 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		if tar xf $DOWNLOAD_PATH/mirror_conf/$FILE -C / 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+			then echo -e "$DONE"
+			RS_MYSQL="on"
+		else
+			echo -e "$FAIL"
+		fi
+	else
+		echo -e "$ABORT"
+	fi
+}
+
+mirror_cpanel_conf()
+{
+	echo -en "Mirrorring cPanel conf...\t"
+	if [ -f $CPANEL_CONFIG ]
+		then
+		cp -p $CPANEL_CONFIG ${CPANEL_CONFIG}_original 2> /dev/null &>> $NULL_LOG
+		echo -e "## cPanel conf\n" >> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		FILE=cpanelconfig.tar.gz
+		mirror_do_ftp 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		if tar xf $DOWNLOAD_PATH/mirror_conf/$FILE -C / 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+			then echo -e "$DONE"
+			RS_CPANEL="on"
+		else
+			echo -e "$FAIL"
+		fi
+	else
+		echo -e "$ABORT"
+	fi
+}
+
+mirror_csf_conf()
+{
+	echo -en "Mirrorring CSF conf...\t\t"
+	if [ -f $CSF_CONFIG ]
+		then
+		cp -p $CSF_CONFIG ${CSF_CONFIG}_original 2> /dev/null &>> $NULL_LOG 
+		echo -e "## CSF conf\n" >> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		FILE=csfconfig.tar
+		mirror_do_ftp 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		if tar xf $DOWNLOAD_PATH/mirror_conf/$FILE -C / 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+			then echo -e "$DONE"
+			RS_CSF="on"
+		else
+			echo -e "$FAIL"
+		fi
+	else
+		echo -e "$ABORT"
+	fi
+}
+
+
+mirror_lsws_conf()
+{
+	echo -en "Mirrorring LiteSpeed conf...\t"
+	if [ -f $LSWS_CONFIG ]
+		then
+		cp -p $LSWS_CONFIG ${LSWS_CONFIG}_original 2> /dev/null &>> $NULL_LOG
+		echo -e "## LiteSpeed conf\n" >> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		FILE=lswsconfig.tar.gz
+		mirror_do_ftp 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		if tar xf $DOWNLOAD_PATH/mirror_conf/$FILE -C / 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+			then echo -e "$DONE"
+			RS_LSWS="on"
+		else
+			echo -e "$FAIL"
+		fi
+	else
+		echo -e "$ABORT"
+	fi
+}
+
+mirror_cagefs_conf()
+{
+	echo -en "Mirrorring CageFS conf...\t"
+	if [ -f $CAGEFS_CONFIG ]
+		then
+		cp -p $CAGEFS_CONFIG ${CAGEFS_CONFIG}_original 2> /dev/null &>> $NULL_LOG 
+		echo -e "## CageFS conf\n" >> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		FILE=cagefsconfig.tar.gz
+		mirror_do_ftp 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		if tar xf $DOWNLOAD_PATH/mirror_conf/$FILE -C / 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+			then 
+			cagefsctl --force-update 2> /dev/null &>> $NULL_LOG
+			echo -e "$DONE"
+		else
+			echo -e "$FAIL"
+		fi
+	else
+		echo -e "$ABORT"
+	fi
+}
+
+mirror_php_conf()
+{
+	echo -en "Mirrorring PHP conf...\t\t"
+	if [ -f $PHP_CONFIG ]
+		then
+		cp -p $PHP_CONFIG ${PHP_CONFIG}_original 2> /dev/null &>> $NULL_LOG
+		echo -e "## PHP conf\n" >> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		FILE=phpconfig.tar
+		mirror_do_ftp 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+		if tar xf $DOWNLOAD_PATH/mirror_conf/$FILE -C / 2> /dev/null &>> $DOWNLOAD_PATH/mirror_conf/mirror_ftp.log
+			then 
+			cagefsctl --rebuild-alt-php-ini 2> /dev/null &>> $NULL_LOG
+			echo -e "$DONE"
+		else
+			echo -e "$FAIL"
+		fi
+	else
+		echo -e "$ABORT"
+	fi
+}
+
+harden_sysctl(){
+	echo -ne "Hardening sysctl.conf (SYN)...\t"
+	declare -a idealval=(
+        'net.ipv4.ip_forward = 0'
+	'net.ipv4.conf.all.accept_source_route = 0'
+	'net.ipv4.conf.lo.accept_source_route = 0'
+	'net.ipv4.conf.eth0.accept_source_route = 0'
+	'net.ipv4.conf.default.accept_source_route = 0'
+	'net.ipv4.conf.all.rp_filter = 1'
+	'net.ipv4.conf.lo.rp_filter = 1'
+	'net.ipv4.conf.eth0.rp_filter = 1'
+	'net.ipv4.conf.default.rp_filter = 1'
+	'net.ipv4.conf.all.accept_redirects = 0'
+	'net.ipv4.conf.lo.accept_redirects = 0'
+	'net.ipv6.conf.eth0.accept_redirects = 0'
+	'net.ipv4.conf.default.accept_redirects = 0'
+	'net.ipv4.conf.all.log_martians = 0'
+	'net.ipv4.conf.lo.log_martians = 1'
+	'net.ipv4.conf.eth0.log_martians = 0'
+	'kernel.sysrq = 0'
+	'kernel.core_uses_pid = 1'
+	'net.ipv4.tcp_fin_timeout = 15'
+	'net.ipv4.tcp_keepalive_time = 1800'
+	'net.ipv4.tcp_window_scaling = 0'
+	'net.ipv4.tcp_sack = 0'
+	'net.ipv4.tcp_timestamps = 0'
+	'net.ipv4.tcp_syncookies = 1'
+	'net.ipv4.icmp_echo_ignore_broadcasts = 1'
+	'net.ipv4.icmp_ignore_bogus_error_responses = 1'
+	'net.ipv4.tcp_max_syn_backlog = 1024'
+	'net.ipv4.tcp_max_tw_buckets = 1440000'
+	'net.ipv4.ip_local_port_range = 16384 65536'
+	);
+	if ! cp -p $SYSCTL ${SYSCTL}_original 2> /dev/null &>> $NULL_LOG
+		then harden_sysctl_status=1
+	fi
+	for (( i=0; i<${#idealval[*]}; i++ ))
+		do
+		var=`echo ${idealval[$i]} | cut -d' ' -f1`
+		opt=`echo ${idealval[$i]}`
+		exist=`grep "$var" $SYSCTL 2> /dev/null 2>> $NULL_LOG`
+		for (( q=i+1; q<${#idealval[*]}; q++ ))
+			do
+			var1=`echo ${idealval[$q]} | cut -d' ' -f1` 
+			if [ "$var" = "$var1" ]
+	 			then
+					opt1=`echo ${idealval[$q]}` 
+					if [ "$opt" != "$opt1" ]
+						then
+							echo -e "$ABORT"
+							return
+					fi
+			fi
+			done
+		if [ -z "$exist" ] #Adding as new varible
+			then echo $opt 2> /dev/null 2>> $NULL_LOG >> $SYSCTL
+		else
+			declare -a j=(`grep -nr "$exist" $SYSCTL | cut -d':' -f1`)
+	        	count=`echo "$exist" | wc -l`
+	                for (( p=0; p<$count; p++ ))
+	     			do
+					a=0	
+					b=`expr $a + $p`
+					if [ "${j[$b]}" -gt "${j[$a]}" ] 2> /dev/null &>> $NULL_LOG
+						then 
+						#Deleting repeated variables	
+						sed -i "${j[$b]}d" $SYSCTL 2> /dev/null 2>> $NULL_LOG
+					else
+						#Replacing with optimal value	
+						sed -i "${j[$a]}s/.*/$opt/g" $SYSCTL 2> /dev/null 2>> $NULL_LOG 
+					fi
+				done
+		fi
+		done
+	if [ "$harden_sysctl_status" == "1" ]
+		then echo -e "$FAIL"
+	else 
+		echo -e "$DONE"
+	fi
+}
+
+harden_host_conf(){
+        echo -ne "Hardening host.conf...\t\t"
+        if cp -p $HOST_CONF `echo $HOST_CONF`_original 2> /dev/null &>> $NULL_LOG
+                then
+                echo -e "order bind,hosts\nmulti on\nnospoof on" 2> /dev/null 2>> $NULL_LOG > $HOST_CONF
+                echo -e "$DONE"
+        else
+                echo -e "$FAIL"
+        fi
+}
+
+harden_binary(){
+        echo -ne "Hardening binaries...\t\t"
+        for binary in `echo $BINARY_TO_HARDEN`;
+        do
+                if [ -f $binary ]
+                then if ! chmod 700 $binary 2> /dev/null &>> $NULL_LOG
+                        then harden_status=1
+                        fi
+                fi
+        done
+        chmod 0000 /usr/bin/finger 2> /dev/null &>> $NULL_LOG
+        chattr +i /usr/bin/finger 2> /dev/null &>> $NULL_LOG
+        if [ "$harden_status" = 1 ]
+                then echo -e "$FAIL"
+        else
+                echo -e "$DONE"
+        fi
+}
+
+harden_ftp(){
+        echo -ne "Hardening FTP...\t\t"
+        if ! cp $FTP_CONF ${FTP_CONF}_original 2> /dev/null &>> $NULL_LOG
+                then echo -e "$FAIL"
+        else
+                sed -i "s/.*AnonymousOnly .*/AnonymousOnly no/g" $FTP_CONF
+                sed -i "s/.*NoAnonymous .*/NoAnonymous yes/g" $FTP_CONF
+                echo -e "$DONE"
+		RS_FTP="on"
+        fi
+}
+
+harden_fstab(){
+        echo -ne "Hardening fstab...\t\t"
+        if cp -p $FSTAB ${FSTAB}_original 2> /dev/null &>> $NULL_LOG
+                then
+                if grep -w "\s/tmp\s" $FSTAB 2> /dev/null &>> $NULL_LOG
+                        then
+                        target_line=`grep -wn "\s/tmp\s" $FSTAB | cut -d':' -f1`
+                        curr_value=`grep -w "\s/tmp\s" $FSTAB | awk {'print $4'}`
+                        sed -i "${target_line}s/$curr_value/defaults,nodev,nosuid,noexec/g" $FSTAB
+                fi
+                if grep -w "\s/dev/shm\s" $FSTAB 2> /dev/null &>> $NULL_LOG
+                        then
+                        target_line=`grep -wn "\s/dev/shm\s" $FSTAB | cut -d':' -f1`
+                        curr_value=`grep -w "\s/dev/shm\s" $FSTAB | awk {'print $4'}`
+                        sed -i "${target_line}s/$curr_value/defaults,nodev,nosuid,noexec/g" $FSTAB
+                fi
+                if grep -w "\s/proc\s" $FSTAB 2> /dev/null &>> $NULL_LOG
+                        then
+                        target_line=`grep -wn "\s/proc\s" $FSTAB | cut -d':' -f1`
+                        curr_value=`grep -w "\s/proc\s" $FSTAB | awk {'print $4'}`
+                        sed -i "${target_line}s/$curr_value/defaults,noexec,nosuid/g" $FSTAB
+                fi
+                if grep -w "^/tmp\s" fstab 2> /dev/null &>> $NULL_LOG
+                        then
+                        target_line=`grep -wn "^/tmp\s" $FSTAB | cut -d':' -f1`
+                        curr_value=`grep -w "^/tmp\s" $FSTAB | awk {'print $4'}`
+                        sed -i "${target_line}s/$curr_value/defaults,rw,noexec,nosuid,nodev,bind/g" $FSTAB
+                else
+                        echo -e "/tmp\t\t\t/var/tmp\t\tnone\tdefaults,rw,noexec,nosuid,nodev,bind\t0 0" >> $FSTAB
+                fi
+                echo -e "$DONE"
+        else
+                echo -e "$FAIL"
+        fi
+
+}
+
+harden_dns(){
+        echo -ne "Harding DNS Recursion...\t"
+        if cp -p $NAMED_CONF ${NAMED_CONF}_original 2> /dev/null &>> $NULL_LOG
+                then
+                sed -i "s/recursion yes/recursion no/g" $NAMED_CONF 2> /dev/null &>> $NULL_LOG
+                target_line=`grep -n 'options {' $NAMED_CONF | cut -d':' -f1`
+                let "target_line = $target_line + 1"
+                sed -i "${target_line}i\ allow-recursion no;" $NAMED_CONF 2> /dev/null &>> $NULL_LOG
+                if ! named-checkconf $NAMED_CONF 2> /dev/null &>> $NULL_LOG
+                        then
+                        cp -pf ${NAMED_CONF}_original $NAMED_CONF 2> /dev/null &>> $NULL_LOG
+                        echo -e "$ABORT"
+                else
+                        echo -e "$DONE"
+			RS_DNS="on"
+                fi
+        else
+                echo -e "$FAIL"
+        fi
+}
+
+harden_nsswitch(){
+        echo -ne "Hardening nsswitch...\t\t"
+        if cp -p $DNS_CONF ${DNS_CONF}_original 2> /dev/null &>> $NULL_LOG
+                then
+                if grep "^hosts:" $DNS_CONF 2> /dev/null &>> $NULL_LOG
+                        then
+                        target_line=`grep -n "^hosts:" $DNS_CONF | cut -d':' -f1`
+                        curr_value=`grep  "^hosts:" $DNS_CONF`
+                        sed -i "${target_line}s/$curr_value/hosts:      files dns/g" $DNS_CONF
+                fi
+                for target_line in `grep -vn ^# $DNS_CONF | grep -w "nis" | cut -d':' -f 1`
+                do
+                        sed -i "${target_line}s/\bnis\b//g" $DNS_CONF 2> /dev/null &>> $NULL_LOG
+                done
+                echo -e "$DONE"
+        else
+                echo -e "$FAIL"
+        fi
+}
+
+harden_ssh(){
+        echo -ne "Hardening SSH...\t\t"
+        if ! (grep "^TCP_IN" $CSF_CONFIG 2> /dev/null 2>> $NULL_LOG | grep $SSH_PORT 2> /dev/null &>> $NULL_LOG)
+                then
+                target_line=`grep -nw "^TCP_IN" $CSF_CONFIG 2> /dev/null 2>> $NULL_LOG | cut -d':' -f1`
+                sed -i "${target_line}s/\"$/,${SSH_PORT}\"/g" $CSF_CONFIG 2> /dev/null &>> $NULL_LOG
+                csf -r 2> /dev/null &>> $NULL_LOG
+                if ! (grep "^TCP_IN" $CSF_CONFIG 2> /dev/null 2>> $NULL_LOG | grep $SSH_PORT 2> /dev/null &>> $NULL_LOG)
+                        then echo -e "$ABORT"
+                        return 1
+                fi
+        fi
+        if cp -p $SSHD_CONF ${SSHD_CONF}_original 2> /dev/null &>> $NULL_LOG
+                then useradd $WHEEL_USER 2> /dev/null 2>> $NULL_LOG
+                passwd $WHEEL_USER 2> /dev/null 2>> $NULL_LOG
+                usermod -G $WHEEL_USER secure 2> /dev/null &>> $NULL_LOG
+                target_line=`grep -nw "^Port" $SSHD_CONF | cut -d':' -f1`
+                curr_value=`grep -w "^Port" $SSHD_CONF`
+                sed -i "${target_line}s/$curr_value/Port ${SSH_PORT}/g" $SSHD_CONF 2> /dev/null &>> $NULL_LOG
+                target_line=`grep -nw "^PermitRootLogin" $SSHD_CONF | cut -d':' -f1`
+                curr_value=`grep -w "^PermitRootLogin" $SSHD_CONF`
+                sed -i "${target_line}s/$curr_value/PermitRootLogin no/g" $SSHD_CONF 2> /dev/null &>> $NULL_LOG
+                echo -e "$DONE"
+		RS_SSH="on"
+        else
+                echo -e "$FAIL"
+        fi
+}
+
+post_install(){
+	sleep 1
+	whiptail --checklist --separate-output "Service restart menu" 30 80 9 \
+	cPanel "Restart cPanel/WHM" $RS_CPANEL \
+	MySQL "Restart MySQL" $RS_MYSQL \
+	LiteSpeed "Restart LiteSpeed" $RS_LSWS \
+	SSH "Restart SSH Daemon" $RS_SSH \
+	CSF "Reload CSF rules" $RS_CSF \
+	DNS "Restart NAMED" $RS_DNS \
+	FTP "Restart PureFTPD" $RS_FTP \
+	R1Soft "Restart CDP Agent" $RS_R1SOFT \
+	Network "Restart network, IP Aliases" $RS_NET 2> /dev/null 2> $DOWNLOAD_PATH/selection_restart
+
+	if [[ -s $DOWNLOAD_PATH/selection_restart ]]
+	        then
+		echo -ne "\n"
+        	echo -e "Restarting services...\t\t$STARTING"
+	        while read choice
+        	do
+                	case $choice in
+	                SSH)
+        	        service sshd restart 2> /dev/null 2>> $NULL_LOG
+                	;;
+	                DNS)
+        	        service named restart 2> /dev/null 2>> $NULL_LOG
+                	;;
+	                cPanel)
+        	        service cpanel restart 2> /dev/null 2>> $NULL_LOG
+                	;;
+	                MySQL)
+        	        service mysql restart 2> /dev/null 2>> $NULL_LOG
+                	;;
+	                FTP)
+        	        service pure-ftpd restart 2> /dev/null 2>> $NULL_LOG
+                	;;
+	                LiteSpeed)
+        	        service lsws restart 2> /dev/null 2>> $NULL_LOG
+                	;;
+	                R1Soft)
+	                service cdp-agent restart 2> /dev/null 2>> $NULL_LOG
+        	        ;;
+                	Network)
+        	        service network restart 2> /dev/null 2>> $NULL_LOG
+                	service ipaliases restart 2> /dev/null 2>> $NULL_LOG
+	                ;;
+        	        *)
+                	;;
+	                esac
+        	done < $DOWNLOAD_PATH/selection_restart
+	        echo -e "Restarting services...\t\t$COMPLETED"
+	fi
+}
+
+## Initial function calls
+parse_switch $@
+pre_install;
+mirror_check_ftp;
+check_cpanel
+check_cloudlinux;
+check_cagefs;
+check_phpselector;
+check_lvem;
+check_ksplice;
+check_litespeed;
+check_percona;
+check_csf;
+check_modsec;
+check_modevasive;
+check_clamav;
+check_softaculous;
+check_installatron;
+check_r1soft;
+check_sim;
+check_spri;
+check_prm;
+check_les;
+check_lsm;
+check_mytop;
+check_smartd;
+check_maldet;
+check_memcached;
+check_logwatch;
+check_chkrootkit;
+check_rkhunter;
+check_libsafe;
+check_lcap;
+check_apc_pecl;
+check_memcache_pecl;
+
+if [ "$CHECK_ONLY" == "yes" ]
+	then exit 0
+fi
+add_repo;
+sleep 1
+
+## Main UI Menu 
+## Menu for installations
+whiptail --checklist --separate-output "Server Components Installation Menu" 30 80 20 \
+cPanel "Install cPanel" $has_cpanel \
+CloudLinux "Install CloudLinux Kernel" $has_cloudlinux \
+CageFS "Install CageFS" $has_cagefs \
+PHPSelector "Install PHP Selector" $has_phpselector \
+LVEM "Install LVE Manager" $has_lvem \
+KSplice "Install KSplice" $has_ksplice \
+LiteSpeed "Replace Apache with LiteSpeed" $has_litespeed \
+Percona "Replace MySQL with Percona MySQL" $has_percona \
+CSF "Install ConfigServer Security & Firewall" $has_csf \
+ModSec "Install ModSecurity" $has_modsec \
+ModEvasive "Install ModEvasive" $has_modevasive \
+ClamAV "Install ClamAV" $has_clamav \
+Softaculous "Install Softaculous for cPanel" $has_softaculous \
+Installatron "Install Installatron for cPanel" $has_installatron \
+Memcached "Install Memcached Daemon" $has_memcached \
+APC "Install APC PECL Extension" $has_apc_pecl \
+Memcache "Install Memcache PECL Extension" $has_memcache_pecl \
+PRM "Install Process Resource Monitor" $has_prm \
+SPRI "Install System Priority" $has_spri \
+SIM "Install System Integrity Monitor" $has_sim \
+LES "Install Linux Environment Security" $has_les \
+LSM "Install Linux Socket Monitor" $has_lsm \
+LibSafe "Install LibSafe" $has_libsafe \
+LCAP "Install LCAP" $has_lcap \
+MyTOP "Install MySQL TOP" $has_mytop \
+SMARTD "Install SMARTD" $has_smartd \
+Maldet "Install Linux Malware Detect" $has_maldet \
+Logwatch "Install Logwatch" $has_logwatch \
+CHKRootKit "Install CHKRootKit" $has_chkrootkit \
+RKHunter "Install RKHunter" $has_rkhunter \
+R1Soft "Install R1Soft Agent" $has_r1soft 2> /dev/null 2> $DOWNLOAD_PATH/selection_install
+
+## Menu for Mirroring
+whiptail --checklist --separate-output "Mirror Configuration Menu" 30 80 6 \
+MySQL "Mirror my.cnf" off \
+CSF "Mirror csf.conf, csf.allow" off \
+PHP "Mirror PHP Selector versions, conf and extentions" off \
+cPanel "Mirror WHM/cPanel configurations" off \
+LiteSpeed "Mirror LiteSpeed configurations" off \
+CageFS "Mirror CageFS configurations" off 2> /dev/null 2> $DOWNLOAD_PATH/selection_mirror
+
+## Menu for Hardening
+whiptail --checklist --separate-output "Server Hardening and Optimization Menu" 30 80 8 \
+FSTAB "Harden /tmp, /var/tmp, /proc and /dev/shm " off \
+Host "Harden host.conf" off \
+SSH "Harden SSH, wheel user, port etc" off \
+Binary "Harden Binary" off \
+DNS "Disable DNS Recursion" off \
+NSSWITCH "Harden nsswitch.conf" off \
+FTP "Optimize FTP" off \
+SYSCTL "Harden TPC/IP, Protect SYN Flood Attack" off 2> /dev/null 2> $DOWNLOAD_PATH/selection_harden
+
+
+## Call Prompt_functions
+while read choice
+do
+        case $choice in
+		LiteSpeed) prompt_litespeed
+		;;
+		CloudLinux) prompt_cloudlinux
+		;;
+		KSplice) prompt_ksplice
+		;;
+                *)
+                ;;
+        esac
+done < $DOWNLOAD_PATH/selection_install
+
+
+## Call install_functions
+echo -ne "\n"
+while read choice
+	do
+        	case $choice in
+		R1Soft) install_r1soft
+		;;
+		APC) install_apc_pecl
+		;;
+		Memcache) install_memcache_pecl
+		;;
+		ClamAV) install_clamav
+		;;
+		Percona) install_percona
+		;;
+		LVEM) install_lvem
+		;;
+		ModEvasive) install_modevasive
+		;;
+		ModSec) install_modsec
+		;;
+		MyTOP) install_mytop
+		;;
+		LCAP) install_lcap
+		;;
+		SMARTD) install_smartd
+		;;
+		PHPSelector) install_phpselector
+		;;
+		LiteSpeed) install_litespeed
+		;;
+		CageFS) install_cagefs
+		;;
+		KSplice) install_ksplice
+		;;
+		cPanel) install_cpanel
+		;;
+		Installatron) install_installatron
+		;;
+		Softaculous) install_softaculous
+		;;
+		Memcached) install_memcached
+		;;
+		CSF) install_csf
+		;;
+		Maldet) install_maldet
+		;;
+		RKHunter) install_rkhunter
+		;;
+		CHKRootKit) install_chkrootkit
+		;;
+		LibSafe) install_libsafe
+		;;
+		Logwatch) install_logwatch
+		;;
+		LSM) install_lsm
+		;;
+		LES) install_les
+		;;
+		SPRI) install_spri
+		;;
+                PRM) install_prm
+                ;;
+                CloudLinux) install_cloudlinux
+                ;;
+		SIM) install_sim
+		;;
+		*)
+                ;;
+        	esac
+done < $DOWNLOAD_PATH/selection_install
+
+## Call mirror_functions
+if [ ! "$FTP_SERVER_STATUS" == "1" ]
+	then
+	echo -en "\n"
+	while read choice
+	do
+        	case $choice in
+		MySQL) mirror_my_conf
+		;;
+		CSF) mirror_csf_conf
+		;;
+		PHP) mirror_php_conf
+		;;
+		cPanel) mirror_cpanel_conf
+		;;
+		LiteSpeed) mirror_lsws_conf
+		;;
+		CageFS) mirror_cagefs_conf
+		;;
+		*)
+		;;
+		esac
+	done < $DOWNLOAD_PATH/selection_mirror
+fi
+
+## Call harden_functions
+echo -en "\n"
+while read choice
+	do
+		case $choice in
+		SSH) harden_ssh
+		;;
+		DNS) harden_dns
+		;;
+		NSSWITCH) harden_nsswitch
+		;;
+		FSTAB) harden_fstab
+		;;
+		FTP) harden_ftp
+		;;
+		Binary) harden_binary
+		;;
+		SYSCTL) harden_sysctl
+		;;
+		Host) harden_host_conf
+		;;
+		*)
+		;;
+		esac
+	done < $DOWNLOAD_PATH/selection_harden
+
+## Call Post Installs
+post_install;
